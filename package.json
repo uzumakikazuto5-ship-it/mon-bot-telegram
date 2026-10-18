@@ -1,0 +1,13 @@
+
+{
+  "name": "jarvis-football-assistant",
+  "version": "1.0.0",
+  "description": "Assistant Telegram pour les informations et résultats du football",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3"
+  }
+}
