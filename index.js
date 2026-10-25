@@ -28,7 +28,7 @@ try {
     };
   }
 } catch (e) {
-  console.error("État initialisé :", e.message);
+  console.error("Erreur de lecture de l'état :", e.message);
 }
 
 function save() {
@@ -36,15 +36,18 @@ function save() {
 }
 
 function localDate(date = new Date()) {
-  return date.toLocaleDateString("en-CA", {
+  const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Africa/Lome",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
-  });
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
-function localTime(date) {
+function localTime(date = new Date()) {
   return date.toLocaleTimeString("fr-FR", {
     timeZone: "Africa/Lome",
     hour: "2-digit",
@@ -60,7 +63,6 @@ function sleep(ms) {
 let lastApiCall = 0;
 
 async function api(path) {
-  // Limite les appels pour éviter de surcharger l'API gratuite.
   const wait = Math.max(0, 6200 - (Date.now() - lastApiCall));
   if (wait) await sleep(wait);
   lastApiCall = Date.now();
@@ -82,7 +84,7 @@ async function sendAll(message) {
     try {
       await bot.telegram.sendMessage(chatId, message);
     } catch (e) {
-      console.error("Envoi Telegram :", e.message);
+      console.error("Erreur Telegram :", e.message);
     }
   }
 }
@@ -118,15 +120,13 @@ async function teamStats(teamId, forceRefresh = false) {
   const matches = (data.matches || [])
     .filter(m =>
       m.status === "FINISHED" &&
-      m.score?.fullTime?.home !== null &&
-      m.score?.fullTime?.away !== null
+      m.score?.fullTime?.home != null &&
+      m.score?.fullTime?.away != null
     )
     .sort((a, b) => new Date(b.utcDate) - new Date(a.utcDate))
     .slice(0, 10);
 
-  if (matches.length < 3) {
-    return null;
-  }
+  if (matches.length < 3) return null;
 
   let scored = 0;
   let conceded = 0;
@@ -152,11 +152,7 @@ async function teamStats(teamId, forceRefresh = false) {
 
 function poisson(k, lambda) {
   let factorial = 1;
-
-  for (let i = 2; i <= k; i++) {
-    factorial *= i;
-  }
-
+  for (let i = 2; i <= k; i++) factorial *= i;
   return Math.exp(-lambda) * Math.pow(lambda, k) / factorial;
 }
 
@@ -166,7 +162,6 @@ function predict(homeLambda, awayLambda) {
   let draw = 0;
   let awayWin = 0;
 
-  // Les scores de 0 à 7 buts sont considérés.
   for (let h = 0; h <= 7; h++) {
     for (let a = 0; a <= 7; a++) {
       const p = poisson(h, homeLambda) * poisson(a, awayLambda);
@@ -179,17 +174,13 @@ function predict(homeLambda, awayLambda) {
   }
 
   scores.sort((a, b) => b.p - a.p);
-
-  // Normalisation des probabilités sur les scores calculés.
   const total = homeWin + draw + awayWin;
 
   return {
     best: scores[0],
     homeWin: homeWin / total,
     draw: draw / total,
-    awayWin: awayWin / total,
-    homeLambda,
-    awayLambda
+    awayWin: awayWin / total
   };
 }
 
@@ -197,23 +188,20 @@ function pct(value) {
   return (value * 100).toFixed(1) + "%";
 }
 
-async function analyzeMatch(match, forceRefresh = false) {
-  const home = await teamStats(match.homeTeam.id, forceRefresh);
-  const away = await teamStats(match.awayTeam.id, forceRefresh);
+async function analyzeMatch(match) {
+  const home = await teamStats(match.homeTeam.id);
+  const away = await teamStats(match.awayTeam.id);
 
   if (!home || !away) {
-    return "Données insuffisantes pour calculer une estimation fiable.";
+    return "Données insuffisantes pour calculer une estimation.";
   }
 
-  // Estimation simple basée sur les buts marqués et encaissés.
   const homeLambda = Math.max(
-    0.15,
-    (home.scored + away.conceded) / 2
+    0.15, (home.scored + away.conceded) / 2
   );
 
   const awayLambda = Math.max(
-    0.15,
-    (away.scored + home.conceded) / 2
+    0.15, (away.scored + home.conceded) / 2
   );
 
   const p = predict(homeLambda, awayLambda);
@@ -221,20 +209,22 @@ async function analyzeMatch(match, forceRefresh = false) {
   return (
     `📊 ESTIMATION STATISTIQUE\n\n` +
     `⚽ ${match.homeTeam.name} - ${match.awayTeam.name}\n` +
-    `📅 ${localDate(new Date(match.utcDate))} à ${localTime(new Date(match.utcDate))}\n\n` +
-    `Buts attendus (modèle) :\n` +
+    `📅 ${localDate(new Date(match.utcDate))} à ` +
+    `${localTime(new Date(match.utcDate))} (Togo)\n\n` +
+    `Buts attendus selon le modèle :\n` +
     `• ${match.homeTeam.name} : ${homeLambda.toFixed(2)}\n` +
     `• ${match.awayTeam.name} : ${awayLambda.toFixed(2)}\n\n` +
-    `Scores possibles les plus probables :\n` +
-    `• ${match.homeTeam.name} ${p.best.h} - ${p.best.a} ${match.awayTeam.name}\n\n` +
+    `Score le plus probable parmi les scores calculés :\n` +
+    `• ${match.homeTeam.name} ${p.best.h} - ${p.best.a} ` +
+    `${match.awayTeam.name}\n\n` +
     `Probabilités estimées :\n` +
-    `• Victoire ${match.homeTeam.name} : ${pct(p.homeWin)}\n` +
+    `• Victoire domicile : ${pct(p.homeWin)}\n` +
     `• Match nul : ${pct(p.draw)}\n` +
-    `• Victoire ${match.awayTeam.name} : ${pct(p.awayWin)}\n\n` +
-    `Échantillon : ${home.played} matchs pour l'équipe à domicile, ` +
-    `${away.played} pour l'équipe à l'extérieur.\n` +
-    `⚠️ Estimation indicative, pas une garantie. Modèle simple sans blessures, ` +
-    `compositions ni ajustement de force des adversaires.`
+    `• Victoire extérieur : ${pct(p.awayWin)}\n\n` +
+    `Échantillon : ${home.played} matchs à domicile, ` +
+    `${away.played} matchs à l'extérieur.\n\n` +
+    `⚠️ Estimation indicative, sans garantie. Le modèle ne tient ` +
+    `pas compte des blessures, compositions ou de la force des adversaires.`
   );
 }
 
@@ -253,8 +243,10 @@ bot.start(async ctx => {
 });
 
 bot.command("ping", ctx => ctx.reply("JARVIS est en ligne !"));
+
 bot.help(ctx => ctx.reply(
-  "JARVIS : liste des matchs à 6 h, estimation statistique environ 30 minutes avant le match, puis score réel après la rencontre."
+  "JARVIS : matchs à 6 h, estimations statistiques avant les rencontres " +
+  "et scores finaux après les matchs."
 ));
 
 let busy = false;
@@ -267,11 +259,18 @@ async function runChecks() {
     const matches = await getMatches();
     const now = Date.now();
     const today = localDate();
+    const time = localTime();
 
-    // Liste des matchs du jour à 6 h.
-    if (localTime(new Date()) === "06:00" && state.dailySent !== today) {
+    // Envoi entre 06:00 et 06:10, heure du Togo.
+    // Cela évite de manquer l'envoi si la vérification est légèrement retardée.
+    if (
+      time >= "06:00" &&
+      time <= "06:10" &&
+      state.dailySent !== today
+    ) {
       const upcoming = matches
         .filter(m =>
+          localDate(new Date(m.utcDate)) === today &&
           ["SCHEDULED", "TIMED"].includes(m.status) &&
           new Date(m.utcDate).getTime() > now
         )
@@ -281,7 +280,8 @@ async function runChecks() {
       let message = `⚽ JARVIS — MATCHS DU JOUR (${today})\n\n`;
 
       if (upcoming.length === 0) {
-        message += "Aucun match à venir trouvé dans les compétitions accessibles.";
+        message +=
+          "Aucun match à venir trouvé dans les compétitions accessibles.";
       } else {
         upcoming.forEach((m, i) => {
           message += `${i + 1}. ${m.homeTeam.name} - ${m.awayTeam.name}\n`;
@@ -300,29 +300,30 @@ async function runChecks() {
       const start = new Date(match.utcDate).getTime();
       const minutes = (start - now) / 60000;
 
-      // Une estimation environ 30 minutes avant le coup d'envoi.
+      // Estimation dans les 30 minutes avant le match.
       if (
         minutes > 0 &&
         minutes <= 30 &&
         !state.reminders.includes(id)
       ) {
-        const analysis = await analyzeMatch(match, true);
+        const analysis = await analyzeMatch(match);
+
         await sendAll(
-          `⏰ RAPPEL : match dans environ 30 minutes\n\n${analysis}`
+          `⏰ MATCH DANS ENVIRON 30 MINUTES\n\n${analysis}`
         );
 
         state.reminders.push(id);
         save();
       }
 
-      // Envoi du score réel quand l'API indique la fin du match.
+      // Score réel après la fin officielle selon l'API.
       if (
         match.status === "FINISHED" &&
         !state.resultsSent.includes(id)
       ) {
         const score = match.score?.fullTime;
 
-        if (score && score.home !== null && score.away !== null) {
+        if (score && score.home != null && score.away != null) {
           await sendAll(
             `🏁 SCORE FINAL\n\n${match.homeTeam.name} ` +
             `${score.home} - ${score.away} ${match.awayTeam.name}`
